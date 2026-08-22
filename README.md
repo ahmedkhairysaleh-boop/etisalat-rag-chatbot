@@ -38,17 +38,32 @@ The Emerald 430 package costs 430 EGP per month before taxes [1].
 ```mermaid
 graph TD
     A[Customer question] --> B[understand]
+
     B -->|greeting or thanks| C[smalltalk]
     B -->|real question| D[retrieve]
-    D -->|relevant context found| E[generate]
+
+    D -->|relevant context| E[generate]
     D -->|nothing usable| F[no_context]
+
     C --> G[Answer]
     E --> G
     F --> G
 
-    B -.->|rewrite follow-ups<br/>split multi-product questions| B
-    D -.->|ChromaDB<br/>447 chunks| D
-    E -.->|Groq / gpt-oss-120b| E
+    subgraph inside_understand [inside understand]
+        H[detect language]
+        I[rewrite follow-ups<br/>using recent turns]
+        J[split multi-product<br/>questions]
+    end
+
+    subgraph components [ ]
+        K[(ChromaDB<br/>447 chunks)]
+        L[Groq<br/>gpt-oss-120b]
+    end
+
+    D -.- K
+    E -.- L
+    I -.- L
+    J -.- L
 ```
 
 The agent is a LangGraph state machine with two conditional edges.
