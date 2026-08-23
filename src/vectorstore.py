@@ -3,6 +3,10 @@
 The only module that knows which vector database is in use. Everything else
 talks to it through these four functions, so swapping Chroma for something
 else would change this file and nothing more.
+
+The open collection is held at module level. Loading the embedding model takes
+seconds, and the retrieve node asks for the collection on every question, so
+without this the client would be rebuilt on each turn.
 """
 
 import logging
@@ -10,8 +14,9 @@ import logging
 import chromadb
 from chromadb.utils import embedding_functions
 
-from src.config import CHROMA_DIR, COLLECTION_NAME, EMBED_MODEL, TOP_K
-from src.language import detect_language, other_language
+from src.config import (CHROMA_DIR, COLLECTION_NAME, EMBED_DEVICE,
+                        EMBED_MODEL, TOP_K)
+from src.language import detect_language, normalize_query, other_language
 
 log = logging.getLogger(__name__)
 
@@ -21,16 +26,19 @@ BATCH_SIZE = 100
 # falls back to the other language
 WEAK_MATCH_DISTANCE = 0.45
 
+_collection = None
+
 
 def _embedding_function():
     """The model that turns text into vectors. Runs locally, so there is no
     API cost and no rate limit."""
     return embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBED_MODEL
+        model_name=EMBED_MODEL,
+        device=EMBED_DEVICE,
     )
 
 
-def get_collection():
+def _open_collection():
     """Open the collection, creating it if this is the first run.
 
     PersistentClient writes to disk, so the embeddings survive restarts and
@@ -45,8 +53,25 @@ def get_collection():
     )
 
 
+def get_collection():
+    """The open collection, opening it on first use.
+
+    Every caller shares one collection and therefore one loaded copy of the
+    embedding model.
+    """
+    global _collection
+
+    if _collection is None:
+        _collection = _open_collection()
+        log.info("collection ready: %s", COLLECTION_NAME)
+
+    return _collection
+
+
 def reset_collection():
     """Delete the collection and start over."""
+    global _collection
+
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
     try:
@@ -54,6 +79,9 @@ def reset_collection():
         log.info("deleted existing collection")
     except Exception:
         log.info("no existing collection to delete")
+
+    # the cached handle now points at something that no longer exists
+    _collection = None
 
     return get_collection()
 
@@ -117,14 +145,24 @@ def search(collection, question, k=TOP_K):
 
     If the best match is weak, the other language is searched as a fallback -
     a topic may be covered better in one version than the other.
+
+    Arabic numerals in the question are rewritten as Western ones before the
+    search. Every document writes its numbers with Western digits, so a
+    customer asking about "حكاية ميكسات ١٨٠" would otherwise miss the chunk
+    naming it "حكاية ميكسات 180" - and since the six bundle chunks are
+    identical apart from that number, missing it leaves retrieval with nothing
+    to separate them by. The language is detected from the original text,
+    before the rewrite, so nothing about the answer's language changes.
     """
     lang = detect_language(question)
-    hits = _query(collection, question, k, lang)
+    query = normalize_query(question)
+
+    hits = _query(collection, query, k, lang)
 
     if not hits or hits[0]["distance"] > WEAK_MATCH_DISTANCE:
         log.info("weak match in '%s', falling back to '%s'",
                  lang, other_language(lang))
-        hits += _query(collection, question, k, other_language(lang))
+        hits += _query(collection, query, k, other_language(lang))
         hits.sort(key=lambda hit: hit["distance"])
         hits = hits[:k]
 

@@ -1,0 +1,15 @@
+[browser]
+# Streamlit phones home with usage statistics while the app boots. Turning it
+# off removes a network call from the path to first paint.
+gatherUsageStats = false
+
+[server]
+# The default watcher walks every imported module to decide what to reload on
+# save. Torch's dynamic module tree makes that walk slow, and on some versions
+# it raises during the scan. Polling watches the project's own files instead,
+# so editing a source file still reloads the app.
+fileWatcherType = "poll"
+
+[runner]
+# Nothing here depends on being able to re-import a changed module mid-run.
+fastReruns = true
